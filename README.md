@@ -1,11 +1,12 @@
 # mcp-thai-proofread
 
-MCP server ที่ช่วยให้ AI agent ที่รองรับ MCP เช่น Hermes **ตรวจและแก้คำสะกดภาษาไทย**ในไฟล์ Markdown หรือในข้อความได้โดยตรง
-ใช้ LLM ผ่าน endpoint แบบ OpenAI-compatible เช่น OpenRouter, vLLM หรือ Ollama และทำงานบน Docker ในโหมด **streamable HTTP**
-
-ระบบแก้เฉพาะการสะกดคำ โดยไม่เรียบเรียงเนื้อหาใหม่ และตรวจคำตอบของ LLM อีกชั้นหนึ่ง เพื่อไม่ให้ตัวเลข รหัสอ้างอิง URL หรือโครงสร้างของเอกสารเปลี่ยนไป
+MCP server ที่ช่วยให้ AI agent ที่รองรับ MCP เช่น Hermes ตรวจและแก้คำสะกดภาษาไทยในไฟล์ Markdown หรือในข้อความได้โดยตรง
+ทำงานบน Docker ในโหมด **streamable HTTP** โดยใช้ LLM ผ่าน endpoint แบบ OpenAI-compatible เช่น OpenRouter, vLLM หรือ Ollama
 
 ผู้พัฒนา: **Chacharin Lertyosbordin**
+
+> ระบบแก้เฉพาะการสะกดคำ โดยไม่เรียบเรียงเนื้อหาใหม่ และตรวจคำตอบของ LLM อีกชั้นหนึ่ง
+> เพื่อไม่ให้ตัวเลข รหัสอ้างอิง URL หรือโครงสร้างของเอกสารเปลี่ยนไป
 
 ## เครื่องมือที่มีให้
 
