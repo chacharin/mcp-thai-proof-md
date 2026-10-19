@@ -18,10 +18,13 @@ import datetime as dt
 import hmac
 import os
 import sys
+from typing import Annotated
 
 import uvicorn
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import ToolAnnotations
+from pydantic import Field
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -103,49 +106,69 @@ def _file_job(path: str, dry_run: bool) -> dict:
     with open(log, "a", encoding="utf-8") as f:
         f.write(f"\n## ตรวจภาษาไทย {stamp} · {S.llm_model}\n\n"
                 f"- ไฟล์: `{rel}` · ส่งตรวจ {r['chunks']} ช่วง · แก้ {len(r['changes'])} บรรทัด · "
-                f"ไม่รับการแก้ {len(r['rejected'])} บรรทัด\n"
+                f"ปฏิเสธการแก้ไข {len(r['rejected'])} บรรทัด\n"
                 f"- จุดที่น่าสงสัย (ตรวจด้วยรูปแบบ) ก่อน/หลัง: {res['suspect_before']} / {res['suspect_after']}\n")
         for e in r["errors"]:
             f.write(f"- ข้อผิดพลาด: {e}\n")
         for c in r["changes"]:
             f.write(f"\n- บรรทัด {c['line']}\n  - เดิม: {c['before']}\n  - แก้: {c['after']}\n")
         for c in r["rejected"]:
-            f.write(f"\n- บรรทัด {c['line']} ไม่รับการแก้ ({c['reason']})\n  - เดิม: {c['before']}\n  - ที่เสนอ: {c['suggested']}\n")
+            f.write(f"\n- บรรทัด {c['line']} ปฏิเสธการแก้ไข ({c['reason']})\n  - เดิม: {c['before']}\n  - ที่เสนอ: {c['suggested']}\n")
     res["log"] = os.path.relpath(log, S.workspace_dir)
     return res
 
 
 # ------------------------------------------------------------------ tools
-async def proofread_thai(path: str, dry_run: bool = False) -> dict:
-    """ตรวจและแก้การสะกดภาษาไทยของไฟล์ (ค่าเริ่มต้น .md) ใน workspace แก้เฉพาะการสะกด ไม่เปลี่ยนเนื้อหา ตัวเลข รหัส และ URL
+PROOFREAD_THAI_DESCRIPTION = (
+    "ตรวจและแก้คำสะกดภาษาไทยในไฟล์ใน workspace แล้วบันทึกทับไฟล์เดิม โดยสำรองไฟล์ต้นฉบับไว้ก่อนเสมอ "
+    "แก้เฉพาะการสะกด ไม่เปลี่ยนเนื้อหา ตัวเลข รหัสอ้างอิง URL และคำภาษาอังกฤษ "
+    "ไฟล์ยาวอาจใช้เวลาหลายนาที เพราะระบบส่งให้ LLM ตรวจทีละช่วง "
+    "หากต้องการดูรายการที่จะแก้ก่อนโดยยังไม่เปลี่ยนไฟล์ ให้กำหนด dry_run เป็น true"
+)
+PATH_HELP = ("ตำแหน่งไฟล์เทียบกับราก workspace เช่น \"report.md\" หรือ \"project-a/chapter1.md\" "
+             f"(รับเฉพาะไฟล์นามสกุล {', '.join(S.file_extensions)})")
+PROOFREAD_TEXT_DESCRIPTION = (
+    "ตรวจและแก้คำสะกดภาษาไทยในข้อความ แล้วส่งข้อความที่แก้แล้วกลับมา โดยไม่อ่านหรือเขียนไฟล์ใด ๆ "
+    "เหมาะกับข้อความที่ยังไม่ได้บันทึกเป็นไฟล์ เช่น ร่างคำตอบหรือย่อหน้าที่ผู้ใช้วางมา"
+)
 
-    path: path สัมพัทธ์จากราก workspace เช่น "report.md" หรือ "project-a/chapter1.md"
-    dry_run: true = ตรวจอย่างเดียว ไม่เขียนไฟล์ (คืนรายการที่จะแก้)
-    คืนค่า: ok, lines_changed, lines_rejected, suspect_before, suspect_after, errors, backup, log
-    ไฟล์ยาวใช้เวลาหลายนาที เพราะส่งให้ LLM ตรวจทีละช่วง
-    """
+
+async def proofread_thai(
+    path: Annotated[str, Field(description=PATH_HELP)],
+    dry_run: Annotated[bool, Field(description=(
+        "true = ตรวจอย่างเดียว แล้วส่งรายการที่จะแก้กลับมา โดยไม่เปลี่ยนไฟล์"))] = False,
+) -> dict:
     try:
         return await asyncio.to_thread(_file_job, path, dry_run)
     except (ValueError, FileNotFoundError, OSError) as e:
         return {"ok": False, "error": str(e)}
 
 
-async def proofread_text(text: str, title: str = "") -> dict:
-    """ตรวจและแก้การสะกดภาษาไทยของข้อความ แล้วคืนข้อความที่แก้แล้ว (ไม่อ่าน/เขียนไฟล์)
+def _without_title(items: list[dict]) -> list[dict]:
+    """proofread_text puts the title on line 1 as context: drop that line and number the rest from 1."""
+    return [{**c, "line": c["line"] - 1} for c in items if c["line"] > 1]
 
-    text: ข้อความ (Markdown ได้) · title: ชื่อเรื่องใช้เป็นบริบท (ไม่บังคับ)
-    คืนค่า: ok, text, lines_changed, lines_rejected, changes, rejected, errors
-    """
+
+async def proofread_text(
+    text: Annotated[str, Field(description="ข้อความที่ต้องการตรวจ (ใช้ Markdown ได้)")],
+    title: Annotated[str, Field(description=(
+        "ชื่อเรื่องของข้อความ ใช้เป็นบริบทให้ LLM เท่านั้น ไม่ถูกแก้ไขและไม่รวมอยู่ในผลลัพธ์"))] = "",
+) -> dict:
     lines = ((f"# {title}\n" if title else "") + (text or "")).split("\n")
     r = await asyncio.to_thread(proofread_lines, lines, S)
     out = r["lines"][1:] if title else r["lines"]
+    changes = _without_title(r["changes"]) if title else r["changes"]
+    rejected = _without_title(r["rejected"]) if title else r["rejected"]
     return {"ok": not r["errors"], "model": S.llm_model, "text": "\n".join(out),
-            "lines_changed": len(r["changes"]), "lines_rejected": len(r["rejected"]),
-            "changes": r["changes"][:60], "rejected": r["rejected"][:60], "errors": r["errors"]}
+            "lines_changed": len(changes), "lines_rejected": len(rejected),
+            "changes": changes[:60], "rejected": rejected[:60], "errors": r["errors"]}
 
 
-mcp.add_tool(proofread_thai)
-mcp.add_tool(proofread_text)
+# proofread_thai rewrites a file, but always keeps a backup first, so it is not marked destructive
+mcp.add_tool(proofread_thai, description=PROOFREAD_THAI_DESCRIPTION,
+             annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=True))
+mcp.add_tool(proofread_text, description=PROOFREAD_TEXT_DESCRIPTION,
+             annotations=ToolAnnotations(read_only_hint=True, open_world_hint=True))
 
 
 # ------------------------------------------------------------------ http app

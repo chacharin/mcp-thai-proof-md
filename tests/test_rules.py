@@ -18,7 +18,7 @@ def test_unchanged_line_is_same():
 
 def test_deleting_a_line_is_rejected():
     ok, why = judge("มีข้อความ", "   ", 0.5, P)
-    assert not ok and why == "บรรทัดถูกลบ"
+    assert not ok and why == "LLM ลบข้อความในบรรทัดนี้ออก"
 
 
 def test_number_change_is_rejected():
@@ -42,7 +42,7 @@ def test_markdown_structure_change_is_rejected():
 
 def test_rewriting_too_much_is_rejected():
     ok, why = judge("ฝนตกหนักทางภาคใต้", "ภาคเหนือมีอากาศหนาวเย็นตลอดสัปดาห์", 0.5, P)
-    assert not ok and why == "เปลี่ยนมากเกินไป"
+    assert not ok and why == "ข้อความเปลี่ยนไปจากต้นฉบับมากเกินไป"
 
 
 def test_custom_protected_regex():

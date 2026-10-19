@@ -62,11 +62,11 @@ def judge(old: str, new: str, min_sim: float, protected: re.Pattern | None = Non
     if new == old:
         return True, "same"
     if old.strip() and not new.strip():
-        return False, "บรรทัดถูกลบ"
+        return False, "LLM ลบข้อความในบรรทัดนี้ออก"
     if invariants(old, protected) != invariants(new, protected):
-        return False, "ตัวเลข/รหัส/URL/คำอังกฤษ/Markdown เปลี่ยน"
+        return False, "ตัวเลข รหัส URL คำภาษาอังกฤษ หรือรูปแบบ Markdown เปลี่ยนไปจากต้นฉบับ"
     if difflib.SequenceMatcher(None, old, new).ratio() < min_sim:
-        return False, "เปลี่ยนมากเกินไป"
+        return False, "ข้อความเปลี่ยนไปจากต้นฉบับมากเกินไป"
     return True, "fixed"
 
 
@@ -208,7 +208,7 @@ def proofread_lines(lines: list[str], s: Settings) -> dict:
         if len(out) == len(ch.idx):
             return list(zip(ch.idx, out))
         if len(ch.idx) == 1 or depth >= 4:
-            errors.append(f"บรรทัด {ch.idx[0] + 1}-{ch.idx[-1] + 1}: model คืน {len(out)} บรรทัด (ต้องการ {len(ch.idx)}) คงข้อความเดิม")
+            errors.append(f"บรรทัด {ch.idx[0] + 1}-{ch.idx[-1] + 1}: LLM ส่งกลับมา {len(out)} บรรทัด แต่ต้องการ {len(ch.idx)} บรรทัด จึงคงข้อความเดิมไว้")
             return None
         mid = len(ch.idx) // 2
         a = run(Chunk(ch.idx[:mid], ch.headings), depth + 1) or []
