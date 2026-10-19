@@ -1,0 +1,25 @@
+# Keep LF inside the repository and in every checkout, on Windows too.
+# The images are built on Linux: a CRLF shell script or entrypoint fails there with
+# "/bin/sh^M: bad interpreter", and CRLF also makes diffs noisy across machines.
+* text=auto eol=lf
+
+# Leave binaries alone
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.fbx   binary
+*.glb   binary
+*.gltf  binary
+*.zip   binary
+*.gz    binary
+*.tar   binary
+*.db    binary
+*.sqlite binary
+*.pdf   binary

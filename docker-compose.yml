@@ -1,0 +1,30 @@
+# mcp-thai-proofread
+# - MCP endpoint http://mcp-thai-proofread:8800/mcp for agents on the same docker network
+#   (${DOCKER_NETWORK}, default agent_network - create it once: docker network create agent_network)
+# - publishes on ${PUBLISH_ADDR}:${PUBLISH_PORT} (default 0.0.0.0:8805 = reachable from other machines);
+#   set MCP_AUTH_TOKEN in .env so callers must present a token
+# - the workspace (${WORKSPACE_HOST_DIR}, default ./workspace) is mounted read-write: the tool fixes
+#   files in place, always keeping a backup
+# - ./prompts is mounted read-only: SYSTEM_PROMPT_FILE in .env may point at a file there
+# Every ${…} below is set in .env; the defaults here are generic, not tied to any one deployment.
+services:
+  mcp-thai-proofread:
+    build: .
+    image: mcp-thai-proofread:dev
+    container_name: mcp-thai-proofread
+    env_file: .env
+    # uid/gid the container runs as - match the owner of the workspace so files stay writable for both
+    user: "${RUN_UID:-1000}:${RUN_GID:-1000}"
+    ports:
+      - "${PUBLISH_ADDR:-0.0.0.0}:${PUBLISH_PORT:-8805}:8800"
+    volumes:
+      - "${WORKSPACE_HOST_DIR:-./workspace}:/workspace"
+      - "./prompts:/app/prompts:ro"
+    networks:
+      - agent_network
+    restart: unless-stopped
+
+networks:
+  agent_network:
+    external: true
+    name: ${DOCKER_NETWORK:-agent_network}

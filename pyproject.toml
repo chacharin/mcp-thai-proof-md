@@ -1,0 +1,24 @@
+[project]
+name = "mcp-thai-proofread"
+version = "0.2.0"
+description = "MCP server (streamable HTTP) that fixes Thai spelling in Markdown files and text with an OpenAI-compatible LLM"
+readme = "README.md"
+authors = [{ name = "Chacharin Lertyosbordin", email = "lertyosbordin@outlook.com" }]
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp==2.2.0",
+    "uvicorn>=0.30",
+    "starlette>=0.40",
+]
+
+[dependency-groups]
+# tests never call a real LLM - see tests/conftest.py
+dev = ["pytest>=8.0"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

@@ -1,0 +1,26 @@
+.env
+.env.*
+!.env.example
+keys.json
+!keys.example.json
+
+# a deployment's own prompt (may name the organisation) - only the example is published
+prompts/*
+!prompts/*.example.md
+
+# runtime state (./workspace is the default workspace mount - your documents, not code)
+workspace/
+logs/
+data/
+
+__pycache__/
+.venv/
+.pytest_cache/
+
+# old snapshots kept only on the host
+_archive/
+_to_delete/
+*.zip
+*.bak
+*.bak-*
+*.tar.gz
