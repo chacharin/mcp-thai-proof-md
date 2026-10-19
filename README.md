@@ -41,6 +41,8 @@ MCP server สำหรับ**ตรวจและแก้คำสะกด�
 ### ติดตั้ง
 
 ```bash
+git clone https://github.com/chacharin/mcp-thai-proof-md.git
+cd mcp-thai-proof-md
 cp .env.example .env          # แล้วแก้ LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
 mkdir -p workspace            # วางไฟล์ที่ต้องการตรวจไว้ที่นี่ (หรือชี้ไปที่อื่นด้วย WORKSPACE_HOST_DIR)
 docker network create agent_network   # ครั้งแรกครั้งเดียว — ชื่ออื่นตั้งได้ด้วย DOCKER_NETWORK
