@@ -1,0 +1,7 @@
+# mcp-thai-proofread on the SAME host as the agent (added to docker-compose.yml, see COMPOSE_FILE in .env)
+# - the workspace (${WORKSPACE_HOST_DIR}, default ./workspace) is mounted read-write at /workspace: files are
+#   fixed in place directly, always keeping a backup; with a folder here the Hermes dashboard is not used
+services:
+  mcp-thai-proofread:
+    volumes:
+      - "${WORKSPACE_HOST_DIR:-./workspace}:/workspace"

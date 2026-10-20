@@ -50,7 +50,7 @@ def test_health_empty_key_on_a_remote_endpoint_is_explained(monkeypatch):
 
 def test_health_reports_a_missing_workspace(monkeypatch, tmp_path):
     h = health_with(monkeypatch, LLM_API_KEY="sk-real-1234567", WORKSPACE_DIR=str(tmp_path / "nope"))
-    assert h["workspace_mounted"] is False and any("workspace" in p for p in h["problems"])
+    assert h["workspace"]["mode"] is None and any("no workspace" in p for p in h["problems"])
 
 
 @pytest.mark.parametrize("code,expect", [(401, "check LLM_API_KEY"), (403, "budget exceeded")])

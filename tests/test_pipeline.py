@@ -75,7 +75,7 @@ def test_path_prefixes_are_stripped_only_when_configured(monkeypatch, clean_env)
     with pytest.raises(FileNotFoundError):                       # default: no prefix is known
         reload_server().resolve("/opt/data/workspace/report.md")
     monkeypatch.setenv("PATH_PREFIXES", "/opt/data/workspace/")
-    assert reload_server().resolve("/opt/data/workspace/report.md")[1] == "report.md"
+    assert reload_server().resolve("/opt/data/workspace/report.md") == "report.md"
 
 
 @pytest.mark.parametrize("placement,where", [("file", "project-a/part1"), ("top", "project-a")])

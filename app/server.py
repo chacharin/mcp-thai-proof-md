@@ -1,14 +1,17 @@
 """mcp-thai-proofread: MCP server over streamable HTTP (http://<host>:<port>/mcp) + GET /health.
 
 Tools
-  proofread_thai(path, dry_run=False)  fix Thai spelling of a file (FILE_EXTENSIONS, default .md) under
-                                       WORKSPACE_DIR; the original is backed up to <folder>/BACKUP_SUBDIR/
+  proofread_thai(path, dry_run=False)  fix Thai spelling of a file (FILE_EXTENSIONS, default .md) in the
+                                       workspace; the original is backed up to <folder>/BACKUP_SUBDIR/
                                        and the changes are logged to <folder>/NOTES_SUBDIR/proofread-<name>.md
                                        (NOTES_SUBDIR empty = no log)
   proofread_text(text, title="")       fix Thai spelling of a text and return it (no file access)
 
 <folder> depends on OUTPUT_PLACEMENT: "file" (default) = the folder of the file itself,
 "top" = the first folder under the workspace (one place per project folder, however deep the file is).
+
+The workspace is WORKSPACE_DIR when it is mounted here, otherwise the agent's workspace inside Hermes through
+the Hermes dashboard files API (HERMES_DASHBOARD_URL / _USER / _PASSWORD) - see workspace.py.
 """
 from __future__ import annotations
 
@@ -16,7 +19,7 @@ import asyncio
 import contextlib
 import datetime as dt
 import hmac
-import os
+import posixpath
 import sys
 from typing import Annotated
 
@@ -32,11 +35,13 @@ from starlette.routing import Mount, Route
 
 from app.config import Settings, key_state
 from app.proofread import proofread_lines, suspect_count
+from app.workspace import WorkspaceError, open_workspace, safe_relative
 
 S = Settings.from_env()
 if key_state(S.llm_api_key) == "placeholder":   # visible in `docker logs` right after start-up
     print("WARNING: LLM_API_KEY is still the example value from .env.example - every LLM call will fail",
           file=sys.stderr, flush=True)
+WS = open_workspace(S)   # LocalWorkspace / HermesWorkspace / None (no workspace: proofread_text only)
 mcp = MCPServer(
     name="thai-proofread",
     instructions=("ตรวจและแก้การสะกดภาษาไทยของไฟล์ใน workspace หรือของข้อความ "
@@ -44,38 +49,36 @@ mcp = MCPServer(
 )
 
 
-def output_dir(real: str, rel: str) -> str:
-    """Folder that receives the backups/ and notes/ sub-folders (see OUTPUT_PLACEMENT)."""
+def output_dir(rel: str) -> str:
+    """Folder (relative to the workspace) that receives the backups/ and notes/ sub-folders (see OUTPUT_PLACEMENT)."""
     parts = rel.split("/")
     if S.output_placement == "top" and len(parts) > 1:
-        return os.path.join(S.workspace_dir, parts[0])
-    return os.path.dirname(real)
+        return parts[0]
+    return posixpath.dirname(rel)
 
 
 # ------------------------------------------------------------------ files
-def resolve(path: str) -> tuple[str, str]:
-    """Map a path given by the agent to a real file under WORKSPACE_DIR. Returns (real, relative)."""
+def resolve(path: str) -> str:
+    """Map a path given by the agent to a file in the workspace. Returns its path relative to the workspace."""
+    if WS is None:
+        raise WorkspaceError("no workspace: mount WORKSPACE_DIR, or set the Hermes dashboard login "
+                             "(HERMES_DASHBOARD_URL / _USER / _PASSWORD)")
     p = (path or "").strip().replace("\\", "/")
     for pre in S.path_prefixes:
         if p.startswith(pre):
             p = p[len(pre):]
             break
-    p = p.lstrip("/")
-    root = os.path.realpath(S.workspace_dir)
-    real = os.path.realpath(os.path.join(root, p))
-    if not real.startswith(root + os.sep):
-        raise ValueError("path must be inside the workspace")
-    if not real.lower().endswith(tuple(S.file_extensions)):
+    rel = safe_relative(p)
+    if not rel.lower().endswith(tuple(S.file_extensions)):
         raise ValueError(f"only {', '.join(S.file_extensions)} files can be proofread")
-    if not os.path.isfile(real):
+    if not WS.is_file(rel):
         raise FileNotFoundError(f"file not found: {path}")
-    return real, os.path.relpath(real, root)
+    return rel
 
 
 def _file_job(path: str, dry_run: bool) -> dict:
-    real, rel = resolve(path)
-    with open(real, encoding="utf-8") as f:
-        original = f.read()
+    rel = resolve(path)
+    original = WS.read(rel)
     t0 = dt.datetime.now()
     r = proofread_lines(original.split("\n"), S)
     text = "\n".join(r["lines"])
@@ -85,36 +88,28 @@ def _file_job(path: str, dry_run: bool) -> dict:
            "errors": r["errors"], "seconds": round((dt.datetime.now() - t0).total_seconds(), 1)}
     if dry_run:
         return {**res, "changes": r["changes"][:60], "rejected": r["rejected"][:60]}
-    job_dir = output_dir(real, rel)
+    job_dir = output_dir(rel)
     stamp = t0.strftime("%Y%m%d-%H%M%S")
-    name = os.path.basename(real)
+    name = posixpath.basename(rel)
     if r["changes"]:
-        bdir = os.path.join(job_dir, S.backup_subdir)
-        os.makedirs(bdir, exist_ok=True)
-        backup = os.path.join(bdir, f"{name}.bak-proof-{stamp}")
-        with open(backup, "w", encoding="utf-8") as f:
-            f.write(original)
-        with open(real, "w", encoding="utf-8") as f:
-            f.write(text)
-        res["backup"] = os.path.relpath(backup, S.workspace_dir)
+        backup = posixpath.join(job_dir, S.backup_subdir, f"{name}.bak-proof-{stamp}")
+        WS.write(backup, original)      # the backup first: the file is only replaced once it is safe
+        WS.write(rel, text)
+        res["backup"] = backup
     res["sample_changes"] = [{"before": c["before"][:120], "after": c["after"][:120]} for c in r["changes"][:10]]
     if not S.notes_subdir:
         return res
-    ndir = os.path.join(job_dir, S.notes_subdir)
-    os.makedirs(ndir, exist_ok=True)
-    log = os.path.join(ndir, f"proofread-{os.path.splitext(name)[0]}.md")
-    with open(log, "a", encoding="utf-8") as f:
-        f.write(f"\n## ตรวจภาษาไทย {stamp} · {S.llm_model}\n\n"
-                f"- ไฟล์: `{rel}` · ส่งตรวจ {r['chunks']} ช่วง · แก้ {len(r['changes'])} บรรทัด · "
-                f"ปฏิเสธการแก้ไข {len(r['rejected'])} บรรทัด\n"
-                f"- จุดที่น่าสงสัย (ตรวจด้วยรูปแบบ) ก่อน/หลัง: {res['suspect_before']} / {res['suspect_after']}\n")
-        for e in r["errors"]:
-            f.write(f"- ข้อผิดพลาด: {e}\n")
-        for c in r["changes"]:
-            f.write(f"\n- บรรทัด {c['line']}\n  - เดิม: {c['before']}\n  - แก้: {c['after']}\n")
-        for c in r["rejected"]:
-            f.write(f"\n- บรรทัด {c['line']} ปฏิเสธการแก้ไข ({c['reason']})\n  - เดิม: {c['before']}\n  - ที่เสนอ: {c['suggested']}\n")
-    res["log"] = os.path.relpath(log, S.workspace_dir)
+    log = posixpath.join(job_dir, S.notes_subdir, f"proofread-{posixpath.splitext(name)[0]}.md")
+    lines = [f"\n## ตรวจภาษาไทย {stamp} · {S.llm_model}\n\n"
+             f"- ไฟล์: `{rel}` · ส่งตรวจ {r['chunks']} ช่วง · แก้ {len(r['changes'])} บรรทัด · "
+             f"ปฏิเสธการแก้ไข {len(r['rejected'])} บรรทัด\n"
+             f"- จุดที่น่าสงสัย (ตรวจด้วยรูปแบบ) ก่อน/หลัง: {res['suspect_before']} / {res['suspect_after']}\n"]
+    lines += [f"- ข้อผิดพลาด: {e}\n" for e in r["errors"]]
+    lines += [f"\n- บรรทัด {c['line']}\n  - เดิม: {c['before']}\n  - แก้: {c['after']}\n" for c in r["changes"]]
+    lines += [f"\n- บรรทัด {c['line']} ปฏิเสธการแก้ไข ({c['reason']})\n  - เดิม: {c['before']}\n  - ที่เสนอ: {c['suggested']}\n"
+              for c in r["rejected"]]
+    WS.append(log, "".join(lines))
+    res["log"] = log
     return res
 
 
@@ -140,7 +135,7 @@ async def proofread_thai(
 ) -> dict:
     try:
         return await asyncio.to_thread(_file_job, path, dry_run)
-    except (ValueError, FileNotFoundError, OSError) as e:
+    except (ValueError, FileNotFoundError, OSError, WorkspaceError) as e:
         return {"ok": False, "error": str(e)}
 
 
@@ -179,17 +174,22 @@ def health_report() -> dict:
     """ok = the LLM settings look usable. problems explains every reason it is not (or may not be)."""
     state = key_state(S.llm_api_key)
     local = any(h in S.llm_base_url for h in _LOCAL_HOSTS)
-    mounted = os.path.isdir(S.workspace_dir)
+    reachable = WS is not None and WS.reachable()
     problems = []
     if state == "placeholder":
         problems.append("LLM_API_KEY is still the example value from .env.example - put your real key in .env")
     elif state == "empty" and not local:
         problems.append("LLM_API_KEY is empty - fine only if LLM_BASE_URL needs no key")
-    if not mounted:
-        problems.append("the workspace is not mounted - proofread_thai cannot reach any file")
+    if WS is None:
+        problems.append("no workspace: mount WORKSPACE_DIR, or set the Hermes dashboard login - "
+                        "proofread_thai cannot reach any file (proofread_text still works)")
+    elif not reachable:
+        problems.append("the workspace cannot be reached - " + ("is the folder mounted?" if WS.mode == "local"
+                        else "check HERMES_DASHBOARD_URL / _USER / _PASSWORD"))
     return {"ok": state == "set" or (state == "empty" and local),
             "model": S.llm_model, "base_url": S.llm_base_url,
-            "key_configured": state == "set", "workspace": S.workspace_dir, "workspace_mounted": mounted,
+            "key_configured": state == "set",
+            "workspace": {"mode": WS.mode if WS else None, "root": WS.root if WS else None, "reachable": reachable},
             "auth": bool(S.auth_token), "problems": problems}
 
 

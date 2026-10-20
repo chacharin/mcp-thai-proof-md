@@ -41,6 +41,28 @@ agent ──POST /mcp──▶ mcp-thai-proofread (container)
 
 ค่าใช้จ่ายขึ้นอยู่กับ LLM ที่เลือกและความยาวของเอกสาร เพราะทุกช่วงของเอกสารต้องส่งให้ LLM ตรวจหนึ่งครั้ง
 
+### สองวิธีในการเข้าถึง workspace
+
+`proofread_thai` ต้องอ่านและเขียนไฟล์ชุดเดียวกับที่ agent ใช้งาน ระบบรองรับ 2 วิธี และเลือกให้เองตอนเริ่มทำงาน
+
+| โหมด | เงื่อนไข | เหมาะกับ |
+|---|---|---|
+| `hermes` | ไม่มีโฟลเดอร์ workspace ใน container แต่กำหนดบัญชี dashboard ของ Hermes ไว้ (`HERMES_DASHBOARD_URL`, `HERMES_DASHBOARD_USER`, `HERMES_DASHBOARD_PASSWORD`) | server อยู่คนละเครื่องกับ Hermes ระบบอ่านและเขียนไฟล์ผ่าน API ไฟล์ของ dashboard ทาง HTTP เหมือน MCP ทั่วไป |
+| `local` | mount โฟลเดอร์ workspace ไว้ที่ `WORKSPACE_DIR` (ค่าเริ่มต้น `/workspace`) | server อยู่เครื่องเดียวกับ agent หรือใช้งานกับ agent อื่นที่ไม่ใช่ Hermes |
+
+```
+โหมด hermes (คนละเครื่องได้)
+agent ──POST /mcp──▶ mcp-thai-proofread ──HTTP──▶ Hermes dashboard ──▶ /opt/data/workspace
+                                         GET  /api/files/read     (อ่านไฟล์)
+                                         POST /api/files/upload   (สำรองไฟล์ บันทึกไฟล์ที่แก้ และบันทึกการแก้ไข)
+
+โหมด local (เครื่องเดียวกัน)
+agent ──POST /mcp──▶ mcp-thai-proofread ──▶ /workspace (โฟลเดอร์ที่ mount ไว้)
+```
+
+ทั้งสองโหมดให้ผลลัพธ์และสร้างไฟล์สำรองกับบันทึกการแก้ไขเหมือนกันทุกประการ ต่างกันเพียงช่องทางที่ใช้เข้าถึงไฟล์
+หากมีทั้งโฟลเดอร์ที่ mount ไว้และบัญชี dashboard ระบบจะใช้โฟลเดอร์ก่อน
+
 ## เริ่มต้นใช้งาน
 
 ### สิ่งที่ต้องเตรียม
@@ -58,14 +80,38 @@ agent ──POST /mcp──▶ mcp-thai-proofread (container)
 git clone https://github.com/chacharin/mcp-thai-proof-md.git
 cd mcp-thai-proof-md
 cp .env.example .env                  # จากนั้นแก้ LLM_BASE_URL, LLM_API_KEY และ LLM_MODEL ในไฟล์ .env
-mkdir -p workspace                    # วางไฟล์ที่ต้องการตรวจไว้ในโฟลเดอร์นี้ หรือกำหนดโฟลเดอร์อื่นใน WORKSPACE_HOST_DIR
 docker network create agent_network   # สร้างครั้งแรกครั้งเดียว หากต้องการใช้ชื่ออื่นให้กำหนดใน DOCKER_NETWORK
+```
+
+จากนั้นเลือกวิธีเข้าถึง workspace ในไฟล์ `.env` ตามแบบใดแบบหนึ่ง
+
+**แบบที่ 1 ผ่าน dashboard ของ Hermes** (server อยู่คนละเครื่องกับ Hermes ได้) ให้กำหนดค่าในหมวด `--- workspace ---`
+
+```bash
+HERMES_DASHBOARD_URL=http://hermes-dashboard:9119   # หรือ https://<เครื่องของ Hermes> เมื่ออยู่คนละเครื่อง
+HERMES_DASHBOARD_USER=<ชื่อผู้ใช้ dashboard>
+HERMES_DASHBOARD_PASSWORD=<รหัสผ่าน dashboard>
+PATH_PREFIXES=/opt/data/workspace/                  # Hermes อ้างถึงไฟล์ด้วย path นี้
+```
+
+**แบบที่ 2 mount โฟลเดอร์** (server อยู่เครื่องเดียวกับ agent) ให้เพิ่มไฟล์ `docker-compose.same-host.yml` เข้าไปในการสั่ง compose
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.same-host.yml   # บน Windows ใช้ ; คั่นแทน :
+WORKSPACE_HOST_DIR=./workspace                                 # โฟลเดอร์บนเครื่องที่เก็บไฟล์ที่ต้องการตรวจ
+```
+
+เมื่อกำหนด `COMPOSE_FILE` ไว้ใน `.env` แล้ว คำสั่ง `docker compose` ทุกคำสั่งจะใช้ทั้งสองไฟล์เอง จึงไม่ต้องระบุ `-f` ทุกครั้ง
+
+จากนั้นเริ่มระบบและตรวจสถานะ
+
+```bash
 docker compose up -d --build
 curl http://127.0.0.1:8805/health
 ```
 
-หาก `/health` ตอบ `"ok": true` แปลว่าการตั้งค่า LLM พร้อมใช้งานและ mount workspace แล้ว
-หากยังมีปัญหา ให้ดูรายการ `problems` ซึ่งจะบอกสาเหตุ เช่น ยังใช้ `LLM_API_KEY` ตัวอย่างจาก `.env.example` หรือยังไม่ได้ mount workspace
+หาก `/health` ตอบ `"ok": true` และ `workspace.reachable` เป็น `true` แปลว่าการตั้งค่า LLM พร้อมใช้งานและเข้าถึง workspace ได้แล้ว
+หากยังมีปัญหา ให้ดูรายการ `problems` ซึ่งจะบอกสาเหตุ เช่น ยังใช้ `LLM_API_KEY` ตัวอย่างจาก `.env.example` หรือ dashboard ปฏิเสธรหัสผ่าน
 
 `/health` ไม่ได้เรียก LLM จริง หากต้องการทดสอบให้แน่ใจว่า LLM ตอบได้ ให้สั่ง (เรียก LLM จริงหนึ่งครั้ง):
 
@@ -91,9 +137,10 @@ mcp_servers:
 
 หาก timeout ของ client สั้นกว่าเวลาที่ใช้ตรวจจริง client จะแจ้งว่าการเรียกล้มเหลว ทั้งที่ server ยังแก้ไขไฟล์ต่อไปอยู่
 
-agent ต้องมองเห็นไฟล์ชุดเดียวกับ server จึงควร mount โฟลเดอร์เดียวกันให้ทั้งสองฝั่ง (กำหนดฝั่ง server ด้วย `WORKSPACE_HOST_DIR`)
+agent ต้องมองเห็นไฟล์ชุดเดียวกับ server
 - หาก agent อ้างถึงไฟล์ด้วย path ภายในเครื่องของตัวเอง เช่น Hermes ส่ง `/opt/data/workspace/report.md` ให้กำหนด `PATH_PREFIXES=/opt/data/workspace/` เพื่อให้ระบบตัดคำนำหน้านั้นออก
-- กำหนด `RUN_UID` และ `RUN_GID` ให้ตรงกับเจ้าของ workspace เพื่อให้ทั้ง agent และ server ยังเขียนไฟล์ที่แก้แล้วได้
+- โหมด `hermes` ใช้ workspace ของ Hermes เสมอ (`HERMES_WORKSPACE` ค่าเริ่มต้น `/opt/data/workspace`) ไฟล์ที่แก้แล้วจึงเป็นไฟล์เดียวกับที่ agent เห็นทันที
+- โหมด `local` ต้อง mount โฟลเดอร์เดียวกันให้ทั้งสองฝั่ง และกำหนด `RUN_UID` กับ `RUN_GID` ให้ตรงกับเจ้าของ workspace เพื่อให้ทั้ง agent และ server ยังเขียนไฟล์ที่แก้แล้วได้
 
 หากกำหนด `MCP_AUTH_TOKEN` ไว้ ให้เพิ่ม header `Authorization: Bearer <token>` ในการตั้งค่าของ client ด้วย
 สำหรับ client ที่อยู่นอก docker network ให้ใช้ `http://<IP ของเครื่อง>:8805/mcp`
@@ -184,7 +231,7 @@ mcp-thai-proofread มี 2 route
 | Route | ใช้ทำอะไร |
 |---|---|
 | `POST /mcp` | เรียกเครื่องมือทั้งหมดตามมาตรฐาน MCP (JSON-RPC 2.0) agent ใช้ route นี้ |
-| `GET /health` | ตรวจว่าการตั้งค่า LLM พร้อมใช้งานและ mount workspace แล้ว ไม่ต้องใช้ token และไม่เรียก LLM จริง |
+| `GET /health` | ตรวจว่าการตั้งค่า LLM พร้อมใช้งานและเข้าถึง workspace ได้ ไม่ต้องใช้ token และไม่เรียก LLM จริง |
 
 ### การส่งคำขอไปที่ `/mcp`
 
@@ -318,6 +365,9 @@ Accept: application/json, text/event-stream
 | path อยู่นอก workspace | `{"ok": false, "error": "path must be inside the workspace"}` |
 | นามสกุลไฟล์ไม่อยู่ใน `FILE_EXTENSIONS` | `{"ok": false, "error": "only .md files can be proofread"}` |
 | ไม่พบไฟล์ | `{"ok": false, "error": "file not found: report.md"}` |
+| ไม่มี workspace ทั้งสองแบบ | `{"ok": false, "error": "no workspace: mount WORKSPACE_DIR, or set the Hermes dashboard login …"}` |
+| dashboard ปฏิเสธชื่อผู้ใช้หรือรหัสผ่าน | `{"ok": false, "error": "the Hermes dashboard refused HERMES_DASHBOARD_USER / HERMES_DASHBOARD_PASSWORD"}` |
+| ติดต่อ dashboard ไม่ได้ | `{"ok": false, "error": "cannot reach the Hermes dashboard at http://… (URLError)"}` |
 | API key ผิด | `"ok": false` และ `errors` มี `model call failed: HTTP 401 - check LLM_API_KEY in .env …` |
 | ผู้ให้บริการ LLM ปฏิเสธ เช่น งบประมาณหมด | `"ok": false` และ `errors` มี `model call failed: HTTP 403 - the provider refused the request: <เหตุผลจากผู้ให้บริการ>` |
 | LLM ส่งจำนวนบรรทัดกลับมาไม่ครบ | `errors` มี `บรรทัด 12-20: LLM ส่งกลับมา 7 บรรทัด แต่ต้องการ 9 บรรทัด จึงคงข้อความเดิมไว้` |
@@ -332,12 +382,15 @@ Accept: application/json, text/event-stream
   "model": "google/gemma-4-31b-it",
   "base_url": "https://openrouter.ai/api/v1",
   "key_configured": true,
-  "workspace": "/workspace",
-  "workspace_mounted": true,
+  "workspace": {"mode": "hermes", "root": "/opt/data/workspace", "reachable": true},
   "auth": false,
   "problems": []
 }
 ```
+
+`workspace.mode` บอกโหมดที่ระบบเลือก (`hermes` หรือ `local` และเป็น `null` เมื่อไม่มี workspace) ส่วน `reachable` บอกว่าเข้าถึงได้จริงหรือไม่
+ในโหมด `hermes` ค่านี้ได้จากการเข้าสู่ระบบ dashboard และเปิดโฟลเดอร์ workspace จริงหนึ่งครั้ง
+หากไม่มี workspace เลย `proofread_text` ยังใช้งานได้ตามปกติ
 
 เมื่อมีปัญหา `ok` จะเป็น `false` และ `problems` จะบอกสาเหตุพร้อมวิธีแก้ เช่น
 `"LLM_API_KEY is still the example value from .env.example - put your real key in .env"`
@@ -380,7 +433,9 @@ prompt ที่แก้ไขแล้วยังต้องสั่งใ�
 
 - **ค่าเริ่มต้นไม่มีการยืนยันตัวตน** และเปิดพอร์ต 8805 ให้เครื่องอื่นในเครือข่ายเข้าถึงได้ (`PUBLISH_ADDR=0.0.0.0`) ผู้ที่เข้าถึงพอร์ตนี้ได้จะสั่งแก้ไฟล์ใน workspace และใช้โควตา LLM ของคุณได้ทันที
   หากไม่จำเป็น ให้กำหนด `PUBLISH_ADDR=127.0.0.1` ซึ่ง agent ที่อยู่ใน docker network เดียวกันจะยังเรียกใช้ได้ตามปกติ หรือกำหนด `MCP_AUTH_TOKEN` เพื่อบังคับให้ผู้เรียกต้องส่ง token
-- workspace ถูก mount **แบบเขียนได้** เพราะเครื่องมือต้องแก้ไฟล์ ระบบรับเฉพาะ path ที่อยู่ภายใน workspace และทุกการแก้ไขจะมีไฟล์สำรองเสมอ
+- ทั้งสองโหมดเขียนไฟล์ได้ เพราะเครื่องมือต้องแก้ไฟล์ ระบบรับเฉพาะ path ที่อยู่ภายใน workspace และทุกการแก้ไขจะมีไฟล์สำรองเสมอ
+- ในโหมด `hermes` รหัสผ่าน dashboard เปิดสิทธิ์ทั้งหน้า dashboard ของ Hermes ไม่ใช่เฉพาะไฟล์ จึงควรเก็บไว้ใน `.env` เท่านั้น และเมื่อ server อยู่คนละเครื่องกับ Hermes ควรเชื่อมผ่าน HTTPS หรือเครือข่ายส่วนตัว (VPN) เพื่อไม่ให้รหัสผ่านและเนื้อหาไฟล์ถูกส่งแบบไม่เข้ารหัส
+  API ไฟล์ของ Hermes ไม่ยอมให้อ่านไฟล์ค่าลับ เช่น `.env` อยู่แล้ว และระบบนี้เรียกเฉพาะไฟล์ภายใต้ `HERMES_WORKSPACE`
 - API key ของ LLM ถูกเก็บไว้ในไฟล์ `.env` เท่านั้น ไม่ถูกส่งให้ agent และไฟล์นี้จะไม่ถูกส่งขึ้น git
 
 ## สำหรับนักพัฒนา
@@ -393,6 +448,7 @@ prompt ที่แก้ไขแล้วยังต้องสั่งใ�
 | `proofread.py` | แบ่งเอกสารเป็นช่วง สร้าง prompt เรียก LLM และตรวจคำตอบของ LLM |
 | `prompt.py` | system prompt ที่มากับระบบ |
 | `server.py` | MCP server เครื่องมือทั้งหมด `/health` การตรวจ token และการจัดการไฟล์ (ตรวจตำแหน่งไฟล์ สำรองไฟล์ เขียนบันทึก) |
+| `workspace.py` | การเข้าถึง workspace ทั้งสองโหมด: โฟลเดอร์ที่ mount ไว้ (`local`) และ API ไฟล์ของ dashboard ของ Hermes (`hermes`) |
 | `selftest.py` | ทดสอบหลังติดตั้ง (เรียก LLM จริง) |
 
 ชุดทดสอบในโฟลเดอร์ `tests/` ใช้ LLM จำลอง จึงไม่ต้องมี LLM จริงและไม่เสียค่าใช้จ่าย สั่งทดสอบผ่าน Docker ได้โดยไม่ต้องติดตั้ง Python:

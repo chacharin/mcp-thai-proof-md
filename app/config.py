@@ -94,6 +94,11 @@ class Settings:
     min_similarity: float
     protected_regex: re.Pattern | None
     workspace_dir: str
+    # no folder at WORKSPACE_DIR: reach the agent's workspace through the Hermes dashboard (see workspace.py)
+    hermes_dashboard_url: str
+    hermes_dashboard_user: str
+    hermes_dashboard_password: str = field(repr=False)
+    hermes_workspace: str
     path_prefixes: list[str]
     file_extensions: list[str]
     output_placement: str
@@ -127,6 +132,10 @@ class Settings:
             min_similarity=_f("MIN_SIMILARITY", "0.5"),
             protected_regex=_protected(),
             workspace_dir=os.getenv("WORKSPACE_DIR", "/workspace").rstrip("/"),
+            hermes_dashboard_url=os.getenv("HERMES_DASHBOARD_URL", "").strip().rstrip("/"),
+            hermes_dashboard_user=os.getenv("HERMES_DASHBOARD_USER", "").strip(),
+            hermes_dashboard_password=os.getenv("HERMES_DASHBOARD_PASSWORD", ""),
+            hermes_workspace=os.getenv("HERMES_WORKSPACE", "/opt/data/workspace").strip().rstrip("/"),
             path_prefixes=[p.replace("\\", "/") for p in _list("PATH_PREFIXES", "")],
             file_extensions=[e.lower() if e.startswith(".") else "." + e.lower()
                              for e in _list("FILE_EXTENSIONS", ".md")],
