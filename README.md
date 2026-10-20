@@ -426,7 +426,7 @@ Accept: application/json, text/event-stream
 
 - `llm_call` หนึ่งระเบียนต่อการเรียก LLM หนึ่งครั้ง (หนึ่งช่วงข้อความ) ส่วน `mcp_tool` คือสรุปของการเรียกเครื่องมือหนึ่งครั้ง ทั้งสองใช้ `request_id` เดียวกัน
 - ตัวเลข token และ `cost_usd` มาจากผู้ให้บริการ (OpenRouter รายงานค่าใช้จ่ายจริง) หากผู้ให้บริการไม่รายงาน ค่าจะเป็น `null`
-- ชื่อช่องข้อมูลเป็นแบบเดียวกับ plugin `usage-telemetry` ของ [harness-server](https://github.com/chacharin/harness-server) และ MCP ตัวอื่นของชุดนี้ จึงรวมเป็นชุดข้อมูลเดียวกันได้
+- ชื่อช่องข้อมูลเป็นแบบเดียวกับ plugin `usage-telemetry` ของ [osint-harness-profile](https://github.com/chacharin/osint-harness-profile) และ MCP ตัวอื่นของชุดนี้ จึงรวมเป็นชุดข้อมูลเดียวกันได้
 
 ### ทดลองด้วย curl
 
