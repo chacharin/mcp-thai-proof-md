@@ -107,6 +107,8 @@ class Settings:
     host: str
     port: int
     auth_token: str = field(repr=False)
+    usage_dir: str = "/app/usage"
+    usage_log: bool = True
 
     @staticmethod
     def from_env() -> "Settings":
@@ -145,4 +147,6 @@ class Settings:
             host=os.getenv("MCP_HOST", "0.0.0.0"),
             port=int(_f("MCP_PORT", "8800")),
             auth_token=os.getenv("MCP_AUTH_TOKEN", "").strip(),
+            usage_dir=os.getenv("USAGE_DIR", "/app/usage").strip().rstrip("/") or "/app/usage",
+            usage_log=os.getenv("USAGE_LOG", "true").strip().lower() not in ("0", "false", "no", "off"),
         )

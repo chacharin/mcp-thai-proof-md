@@ -19,12 +19,14 @@ import concurrent.futures as cf
 import difflib
 import json
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
 from app.config import Settings
+from app.usage import openai_usage
 
 THAI = re.compile(r"[฀-๿]")
 _MARK = "ัิ-ฺ็"
@@ -155,8 +157,27 @@ def clean_output(s: str) -> list[str]:
 
 # ------------------------------------------------------------------ model
 class LLM:
+    """One model call per complete(); every call (tokens, timings, retries) is kept in .calls for the usage log."""
+
     def __init__(self, s: Settings):
         self.s = s
+        self.calls: list[dict] = []
+        self._lock = threading.Lock()
+
+    def _record(self, t0: float, attempts: int, d: dict | None, error: str | None, request_chars: int,
+                answer: str) -> None:
+        t1 = time.time()
+        tokens = openai_usage(d or {})
+        out = tokens.get("output_tokens")
+        with self._lock:
+            self.calls.append({
+                "kind": "llm_call", "model": (d or {}).get("model") or self.s.llm_model,
+                "upstream_provider": (d or {}).get("provider"), "endpoint_host": self.s.llm_base_url.split("://", 1)[-1].split("/", 1)[0],
+                "started_at": round(t0, 3), "ended_at": round(t1, 3), "duration_s": round(t1 - t0, 3), **tokens,
+                "output_tps": round(out / (t1 - t0), 2) if out and t1 > t0 and attempts == 1 else None,
+                "status": "error" if error else "ok", "error": error,
+                "finish_reason": ((d or {}).get("choices") or [{}])[0].get("finish_reason"),
+                "detail": {"attempts": attempts, "request_chars": request_chars, "answer_chars": len(answer)}})
 
     def complete(self, user: str) -> str:
         body = json.dumps({"model": self.s.llm_model, "temperature": self.s.llm_temperature,
@@ -164,17 +185,21 @@ class LLM:
                            **self.s.llm_extra_params,   # provider options from LLM_EXTRA_PARAMS
                            "messages": [{"role": "system", "content": self.s.system_prompt},
                                         {"role": "user", "content": user}]}).encode()
-        headers = {"Content-Type": "application/json", "User-Agent": "mcp-thai-proofread/0.2",
+        headers = {"Content-Type": "application/json", "User-Agent": "mcp-thai-proofread/0.3",
                    **self.s.extra_headers}
         if self.s.llm_api_key:
             headers["Authorization"] = f"Bearer {self.s.llm_api_key}"
         req = urllib.request.Request(f"{self.s.llm_base_url}/chat/completions", data=body, headers=headers)
         last = ""
+        t0 = time.time()
+        chars = len(self.s.system_prompt) + len(user)
         for attempt in range(self.s.llm_retries):
             try:
                 with urllib.request.urlopen(req, timeout=self.s.llm_timeout) as r:
                     d = json.loads(r.read().decode("utf-8"))
-                return d["choices"][0]["message"].get("content") or ""
+                answer = d["choices"][0]["message"].get("content") or ""
+                self._record(t0, attempt + 1, d, None, chars, answer)
+                return answer
             except urllib.error.HTTPError as e:
                 last = f"HTTP {e.code}"
                 if e.code in (401, 403):
@@ -192,6 +217,7 @@ class LLM:
             except (urllib.error.URLError, TimeoutError, KeyError, IndexError, ValueError) as e:
                 last = type(e).__name__
             time.sleep(3 * (attempt + 1))
+        self._record(t0, self.s.llm_retries, None, last, chars, "")
         raise RuntimeError(f"model call failed: {last}")
 
 
@@ -235,4 +261,5 @@ def proofread_lines(lines: list[str], s: Settings) -> dict:
                     rejected.append({"line": i + 1, "reason": why, "before": old, "suggested": cand})
     changes.sort(key=lambda c: c["line"])
     rejected.sort(key=lambda c: c["line"])
-    return {"lines": new, "chunks": len(chunks), "changes": changes, "rejected": rejected, "errors": errors}
+    return {"lines": new, "chunks": len(chunks), "changes": changes, "rejected": rejected, "errors": errors,
+            "llm_calls": sorted(llm.calls, key=lambda c: c["started_at"])}

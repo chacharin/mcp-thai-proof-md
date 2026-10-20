@@ -1,6 +1,6 @@
 [project]
 name = "mcp-thai-proofread"
-version = "0.2.0"
+version = "0.3.0"
 description = "MCP server (streamable HTTP) that fixes Thai spelling in Markdown files and text with an OpenAI-compatible LLM"
 readme = "README.md"
 authors = [{ name = "Chacharin Lertyosbordin", email = "lertyosbordin@outlook.com" }]

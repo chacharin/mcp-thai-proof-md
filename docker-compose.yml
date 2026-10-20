@@ -21,9 +21,13 @@ services:
       - "${PUBLISH_ADDR:-0.0.0.0}:${PUBLISH_PORT:-8805}:8800"
     volumes:
       - "./prompts:/app/prompts:ro"
+      - "usage:/app/usage"          # usage log (tokens and timings of every call), read back through GET /usage
     networks:
       - agent_network
     restart: unless-stopped
+
+volumes:
+  usage:
 
 networks:
   agent_network:

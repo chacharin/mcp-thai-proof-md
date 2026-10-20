@@ -8,7 +8,8 @@ ENV_KEYS = ["LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_TEMPERATURE", "LLM_
             "CHUNK_CHARS", "CONTEXT_LINES", "WORKERS", "MIN_SIMILARITY", "PROTECTED_REGEX", "WORKSPACE_DIR",
             "PATH_PREFIXES", "FILE_EXTENSIONS", "OUTPUT_PLACEMENT", "BACKUP_SUBDIR", "NOTES_SUBDIR",
             "MCP_HOST", "MCP_PORT", "MCP_AUTH_TOKEN",
-            "HERMES_DASHBOARD_URL", "HERMES_DASHBOARD_USER", "HERMES_DASHBOARD_PASSWORD", "HERMES_WORKSPACE"]
+            "HERMES_DASHBOARD_URL", "HERMES_DASHBOARD_USER", "HERMES_DASHBOARD_PASSWORD", "HERMES_WORKSPACE",
+            "USAGE_DIR", "USAGE_LOG"]
 
 
 @pytest.fixture(autouse=True)
@@ -18,6 +19,7 @@ def clean_env(monkeypatch, tmp_path):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("WORKSPACE_DIR", str(tmp_path / "ws"))
     (tmp_path / "ws").mkdir()
+    monkeypatch.setenv("USAGE_DIR", str(tmp_path / "usage"))
     return tmp_path / "ws"
 
 

@@ -226,12 +226,13 @@ agent จะเรียก `proofread_text`
 
 ## รูปแบบ JSON ของคำขอและผลลัพธ์
 
-mcp-thai-proofread มี 2 route
+mcp-thai-proofread มี 3 route
 
 | Route | ใช้ทำอะไร |
 |---|---|
 | `POST /mcp` | เรียกเครื่องมือทั้งหมดตามมาตรฐาน MCP (JSON-RPC 2.0) agent ใช้ route นี้ |
 | `GET /health` | ตรวจว่าการตั้งค่า LLM พร้อมใช้งานและเข้าถึง workspace ได้ ไม่ต้องใช้ token และไม่เรียก LLM จริง |
+| `GET /usage` | ข้อมูลการใช้งาน: token เวลา และค่าใช้จ่ายของการเรียก LLM และการเรียกเครื่องมือทุกครั้ง (ใช้ token เดียวกับ `/mcp` หากกำหนด `MCP_AUTH_TOKEN`) |
 
 ### การส่งคำขอไปที่ `/mcp`
 
@@ -383,6 +384,7 @@ Accept: application/json, text/event-stream
   "base_url": "https://openrouter.ai/api/v1",
   "key_configured": true,
   "workspace": {"mode": "hermes", "root": "/opt/data/workspace", "reachable": true},
+  "usage_log": {"enabled": true, "dir": "/app/usage", "writable": true, "last_error": null},
   "auth": false,
   "problems": []
 }
@@ -394,6 +396,37 @@ Accept: application/json, text/event-stream
 
 เมื่อมีปัญหา `ok` จะเป็น `false` และ `problems` จะบอกสาเหตุพร้อมวิธีแก้ เช่น
 `"LLM_API_KEY is still the example value from .env.example - put your real key in .env"`
+
+### ข้อมูลการใช้งาน (`GET /usage`)
+
+ระบบบันทึกการเรียก LLM ทุกครั้ง และสรุปของการเรียกเครื่องมือแต่ละครั้ง ลงไฟล์ `usage-<วันที่>.jsonl` ใน docker volume `usage`
+เพื่อใช้วิจัยและปรับประสิทธิภาพ เช่น เทียบ model ผู้ให้บริการ หรือขนาดช่วงข้อความ (`CHUNK_CHARS`) ระเบียนมีเฉพาะจำนวน token ขนาด และเวลา ไม่มีข้อความที่ตรวจ
+
+| ค่า | ความหมาย |
+|---|---|
+| `since`, `until` | ช่วงเวลา (epoch วินาที) หากไม่ระบุจะส่งทั้งหมด |
+| `limit` | จำนวนระเบียนสูงสุด (ล่าสุด) ค่าเริ่มต้น 50000 |
+
+ผลลัพธ์ของ `GET /usage?since=1792466000` (ย่อ):
+
+```json
+{
+  "schema": "harness-usage/1",
+  "environment": {"component": "mcp-thai-proofread", "version": "0.3.0", "host": "3f2a…", "cpu_count": 20, "mem_total_mb": 11816, "…": "…"},
+  "records": [
+    {"kind": "llm_call", "tool": "proofread_text", "request_id": "9c1e…", "model": "google/gemma-4-31b-it",
+     "upstream_provider": "Google", "endpoint_host": "openrouter.ai", "duration_s": 2.015,
+     "input_tokens": 480, "cache_read_tokens": 0, "output_tokens": 6, "reasoning_tokens": 0, "total_tokens": 486,
+     "cost_usd": 5.004e-05, "output_tps": 2.98, "status": "ok", "detail": {"attempts": 1, "request_chars": 1342, "answer_chars": 17}},
+    {"kind": "mcp_tool", "tool": "proofread_text", "request_id": "9c1e…", "duration_s": 2.019, "total_tokens": 486,
+     "cost_usd": 5e-05, "status": "ok", "detail": {"llm_calls": 1, "llm_seconds": 2.015, "text_chars": 17, "chunks": 1, "lines_changed": 1}}
+  ]
+}
+```
+
+- `llm_call` หนึ่งระเบียนต่อการเรียก LLM หนึ่งครั้ง (หนึ่งช่วงข้อความ) ส่วน `mcp_tool` คือสรุปของการเรียกเครื่องมือหนึ่งครั้ง ทั้งสองใช้ `request_id` เดียวกัน
+- ตัวเลข token และ `cost_usd` มาจากผู้ให้บริการ (OpenRouter รายงานค่าใช้จ่ายจริง) หากผู้ให้บริการไม่รายงาน ค่าจะเป็น `null`
+- ชื่อช่องข้อมูลเป็นแบบเดียวกับ plugin `usage-telemetry` ของ [harness-server](https://github.com/chacharin/harness-server) และ MCP ตัวอื่นของชุดนี้ จึงรวมเป็นชุดข้อมูลเดียวกันได้
 
 ### ทดลองด้วย curl
 
@@ -414,6 +447,7 @@ curl http://127.0.0.1:8805/mcp \
 - **`MIN_SIMILARITY`** เกณฑ์ความคล้ายกับต้นฉบับ (0–1) ค่ายิ่งสูง ระบบยิ่งเข้มงวดกับการแก้ไขที่เปลี่ยนข้อความมาก
 - **`CHUNK_CHARS`, `CONTEXT_LINES` และ `WORKERS`** ขนาดของแต่ละช่วงที่ส่งให้ LLM จำนวนบรรทัดบริบท และจำนวนช่วงที่ส่งพร้อมกัน หากพบ rate limit (HTTP 429) บ่อย ให้ลด `WORKERS`
 - **`FILE_EXTENSIONS`, `OUTPUT_PLACEMENT`, `BACKUP_SUBDIR` และ `NOTES_SUBDIR`** นามสกุลไฟล์ที่แก้ได้ และตำแหน่งของไฟล์สำรองกับบันทึกการแก้ไข
+- **`USAGE_LOG` และ `USAGE_DIR`** เปิด/ปิดการบันทึกข้อมูลการใช้งาน และโฟลเดอร์ที่เก็บ (ดู[ข้อมูลการใช้งาน](#ข้อมูลการใช้งาน-get-usage))
 - **`LLM_EXTRA_PARAMS`** ค่าเพิ่มเติมที่ส่งไปกับทุกคำขอถึง LLM ในรูปแบบ JSON เช่น `{"top_p": 0.9}` หรือการเลือก provider ของ OpenRouter `{"provider": {"order": ["google-vertex"]}}`
 
 ### การปรับ prompt
@@ -437,6 +471,7 @@ prompt ที่แก้ไขแล้วยังต้องสั่งใ�
 - ในโหมด `hermes` รหัสผ่าน dashboard เปิดสิทธิ์ทั้งหน้า dashboard ของ Hermes ไม่ใช่เฉพาะไฟล์ จึงควรเก็บไว้ใน `.env` เท่านั้น และเมื่อ server อยู่คนละเครื่องกับ Hermes ควรเชื่อมผ่าน HTTPS หรือเครือข่ายส่วนตัว (VPN) เพื่อไม่ให้รหัสผ่านและเนื้อหาไฟล์ถูกส่งแบบไม่เข้ารหัส
   API ไฟล์ของ Hermes ไม่ยอมให้อ่านไฟล์ค่าลับ เช่น `.env` อยู่แล้ว และระบบนี้เรียกเฉพาะไฟล์ภายใต้ `HERMES_WORKSPACE`
 - API key ของ LLM ถูกเก็บไว้ในไฟล์ `.env` เท่านั้น ไม่ถูกส่งให้ agent และไฟล์นี้จะไม่ถูกส่งขึ้น git
+- ข้อมูลการใช้งาน (`/usage`) ไม่มีข้อความที่ตรวจ มีเฉพาะจำนวน token ขนาด เวลา และชื่อไฟล์ไม่ถูกบันทึก แต่ยังบอกปริมาณการใช้งานได้ จึงใช้ token เดียวกับ `/mcp` เมื่อกำหนด `MCP_AUTH_TOKEN`
 
 ## สำหรับนักพัฒนา
 
@@ -449,6 +484,7 @@ prompt ที่แก้ไขแล้วยังต้องสั่งใ�
 | `prompt.py` | system prompt ที่มากับระบบ |
 | `server.py` | MCP server เครื่องมือทั้งหมด `/health` การตรวจ token และการจัดการไฟล์ (ตรวจตำแหน่งไฟล์ สำรองไฟล์ เขียนบันทึก) |
 | `workspace.py` | การเข้าถึง workspace ทั้งสองโหมด: โฟลเดอร์ที่ mount ไว้ (`local`) และ API ไฟล์ของ dashboard ของ Hermes (`hermes`) |
+| `usage.py` | บันทึกและอ่านข้อมูลการใช้งาน (`/usage`) |
 | `selftest.py` | ทดสอบหลังติดตั้ง (เรียก LLM จริง) |
 
 ชุดทดสอบในโฟลเดอร์ `tests/` ใช้ LLM จำลอง จึงไม่ต้องมี LLM จริงและไม่เสียค่าใช้จ่าย สั่งทดสอบผ่าน Docker ได้โดยไม่ต้องติดตั้ง Python:

@@ -7,6 +7,9 @@ Tools
                                        (NOTES_SUBDIR empty = no log)
   proofread_text(text, title="")       fix Thai spelling of a text and return it (no file access)
 
+GET /usage?since=&until=&limit=  the usage log (tokens and timings of every model call and tool call, no text)
+                                 - see usage.py; needs the MCP_AUTH_TOKEN like /mcp when one is set
+
 <folder> depends on OUTPUT_PLACEMENT: "file" (default) = the folder of the file itself,
 "top" = the first folder under the workspace (one place per project folder, however deep the file is).
 
@@ -21,6 +24,8 @@ import datetime as dt
 import hmac
 import posixpath
 import sys
+import time
+import uuid
 from typing import Annotated
 
 import uvicorn
@@ -35,6 +40,7 @@ from starlette.routing import Mount, Route
 
 from app.config import Settings, key_state
 from app.proofread import proofread_lines, suspect_count
+from app.usage import SCHEMA, UsageLog, sum_tokens
 from app.workspace import WorkspaceError, open_workspace, safe_relative
 
 S = Settings.from_env()
@@ -42,6 +48,8 @@ if key_state(S.llm_api_key) == "placeholder":   # visible in `docker logs` right
     print("WARNING: LLM_API_KEY is still the example value from .env.example - every LLM call will fail",
           file=sys.stderr, flush=True)
 WS = open_workspace(S)   # LocalWorkspace / HermesWorkspace / None (no workspace: proofread_text only)
+VERSION = "0.3.0"
+USAGE = UsageLog("mcp-thai-proofread", VERSION, S.usage_dir, S.usage_log)
 mcp = MCPServer(
     name="thai-proofread",
     instructions=("ตรวจและแก้การสะกดภาษาไทยของไฟล์ใน workspace หรือของข้อความ "
@@ -82,7 +90,7 @@ def _file_job(path: str, dry_run: bool) -> dict:
     t0 = dt.datetime.now()
     r = proofread_lines(original.split("\n"), S)
     text = "\n".join(r["lines"])
-    res = {"ok": not r["errors"], "file": rel, "model": S.llm_model, "dry_run": dry_run, "chunks": r["chunks"],
+    res = {"_llm_calls": r["llm_calls"], "_file_chars": len(original), "ok": not r["errors"], "file": rel, "model": S.llm_model, "dry_run": dry_run, "chunks": r["chunks"],
            "lines_changed": len(r["changes"]), "lines_rejected": len(r["rejected"]),
            "suspect_before": suspect_count(original), "suspect_after": suspect_count(text),
            "errors": r["errors"], "seconds": round((dt.datetime.now() - t0).total_seconds(), 1)}
@@ -113,6 +121,21 @@ def _file_job(path: str, dry_run: bool) -> dict:
     return res
 
 
+# ------------------------------------------------------------------ usage log
+def log_tool(tool: str, t0: float, calls: list[dict], status: str, error: str | None, detail: dict) -> None:
+    """One usage record per model call, then one for the whole tool call (with the summed tokens)."""
+    rid = uuid.uuid4().hex[:16]
+    for c in calls:
+        USAGE.write({**c, "tool": tool, "request_id": rid})
+    t1 = time.time()
+    USAGE.write({"kind": "mcp_tool", "tool": tool, "request_id": rid, "model": S.llm_model,
+                 "started_at": round(t0, 3), "ended_at": round(t1, 3), "duration_s": round(t1 - t0, 3),
+                 **sum_tokens(calls), "tokens_estimated": False if calls else None,
+                 "status": status, "error": error,
+                 "detail": {"llm_calls": len(calls), "llm_seconds": round(sum(c["duration_s"] for c in calls), 3),
+                            **detail}})
+
+
 # ------------------------------------------------------------------ tools
 PROOFREAD_THAI_DESCRIPTION = (
     "ตรวจและแก้คำสะกดภาษาไทยในไฟล์ใน workspace แล้วบันทึกทับไฟล์เดิม โดยสำรองไฟล์ต้นฉบับไว้ก่อนเสมอ "
@@ -133,10 +156,18 @@ async def proofread_thai(
     dry_run: Annotated[bool, Field(description=(
         "true = ตรวจอย่างเดียว แล้วส่งรายการที่จะแก้กลับมา โดยไม่เปลี่ยนไฟล์"))] = False,
 ) -> dict:
+    t0 = time.time()
     try:
-        return await asyncio.to_thread(_file_job, path, dry_run)
+        res = await asyncio.to_thread(_file_job, path, dry_run)
     except (ValueError, FileNotFoundError, OSError, WorkspaceError) as e:
+        log_tool("proofread_thai", t0, [], "error", type(e).__name__, {"dry_run": dry_run})
         return {"ok": False, "error": str(e)}
+    calls, chars = res.pop("_llm_calls", []), res.pop("_file_chars", None)
+    log_tool("proofread_thai", t0, calls, "ok" if res["ok"] else "error", None if res["ok"] else "llm_errors",
+             {"dry_run": dry_run, "file_chars": chars, "chunks": res.get("chunks"),
+              "lines_changed": res.get("lines_changed"), "lines_rejected": res.get("lines_rejected"),
+              "workspace": WS.mode if WS else None})
+    return res
 
 
 def _without_title(items: list[dict]) -> list[dict]:
@@ -150,10 +181,15 @@ async def proofread_text(
         "ชื่อเรื่องของข้อความ ใช้เป็นบริบทให้ LLM เท่านั้น ไม่ถูกแก้ไขและไม่รวมอยู่ในผลลัพธ์"))] = "",
 ) -> dict:
     lines = ((f"# {title}\n" if title else "") + (text or "")).split("\n")
+    t0 = time.time()
     r = await asyncio.to_thread(proofread_lines, lines, S)
     out = r["lines"][1:] if title else r["lines"]
     changes = _without_title(r["changes"]) if title else r["changes"]
     rejected = _without_title(r["rejected"]) if title else r["rejected"]
+    log_tool("proofread_text", t0, r["llm_calls"], "error" if r["errors"] else "ok",
+             "llm_errors" if r["errors"] else None,
+             {"text_chars": len(text or ""), "chunks": r["chunks"], "lines_changed": len(changes),
+              "lines_rejected": len(rejected)})
     return {"ok": not r["errors"], "model": S.llm_model, "text": "\n".join(out),
             "lines_changed": len(changes), "lines_rejected": len(rejected),
             "changes": changes[:60], "rejected": rejected[:60], "errors": r["errors"]}
@@ -180,6 +216,8 @@ def health_report() -> dict:
         problems.append("LLM_API_KEY is still the example value from .env.example - put your real key in .env")
     elif state == "empty" and not local:
         problems.append("LLM_API_KEY is empty - fine only if LLM_BASE_URL needs no key")
+    if S.usage_log and not USAGE.writable():
+        problems.append(f"the usage log folder {S.usage_dir} is not writable - usage records are not kept")
     if WS is None:
         problems.append("no workspace: mount WORKSPACE_DIR, or set the Hermes dashboard login - "
                         "proofread_thai cannot reach any file (proofread_text still works)")
@@ -190,6 +228,8 @@ def health_report() -> dict:
             "model": S.llm_model, "base_url": S.llm_base_url,
             "key_configured": state == "set",
             "workspace": {"mode": WS.mode if WS else None, "root": WS.root if WS else None, "reachable": reachable},
+            "usage_log": {"enabled": S.usage_log, "dir": S.usage_dir, "writable": USAGE.writable(),
+                          "last_error": USAGE.error},
             "auth": bool(S.auth_token), "problems": problems}
 
 
@@ -197,12 +237,27 @@ async def health(_: Request) -> JSONResponse:
     return JSONResponse(health_report())
 
 
+def _qf(request: Request, name: str) -> float | None:
+    v = request.query_params.get(name)
+    try:
+        return float(v) if v not in (None, "") else None
+    except ValueError:
+        return None
+
+
+async def usage(request: Request) -> JSONResponse:
+    """The usage log: ?since=<epoch s>&until=<epoch s>&limit=<n> (default: everything kept, newest 50000)."""
+    limit = int(_qf(request, "limit") or 50000)
+    return JSONResponse({"schema": SCHEMA, "environment": USAGE.env,
+                         "records": USAGE.read(_qf(request, "since"), _qf(request, "until"), max(1, limit))})
+
+
 class BearerAuth:
     def __init__(self, app, token: str):
         self.app, self.token = app, token
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http" and self.token and scope["path"].startswith("/mcp"):
+        if scope["type"] == "http" and self.token and scope["path"].startswith(("/mcp", "/usage")):
             got = dict(scope.get("headers") or []).get(b"authorization", b"").decode()
             if not hmac.compare_digest(got, f"Bearer {self.token}"):
                 await JSONResponse({"error": "unauthorized"}, status_code=401)(scope, receive, send)
@@ -222,7 +277,7 @@ async def lifespan(app):
         yield
 
 
-app = BearerAuth(Starlette(routes=[Route("/health", health), Mount("/", app=mcp_app)], lifespan=lifespan), S.auth_token)
+app = BearerAuth(Starlette(routes=[Route("/health", health), Route("/usage", usage), Mount("/", app=mcp_app)], lifespan=lifespan), S.auth_token)
 
 if __name__ == "__main__":
     uvicorn.run(app, host=S.host, port=S.port, log_level="info")
